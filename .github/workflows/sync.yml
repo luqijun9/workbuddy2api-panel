@@ -1,0 +1,68 @@
+name: sync-upstream
+
+# 跟进上游：把 misakano7545/workbuddy2api-panel 的新提交合并进本 fork，
+# 上游发新版时打同名 tag 触发 binaries.yml 出带 DNS 补丁的包。
+# 上游若改到补丁邻近行会合并冲突 → 本工作流转红，需人工解一次。
+
+on:
+  schedule:
+    - cron: '15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 合并上游 main 并按需出包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/misakano7545/workbuddy2api-panel.git || true
+          git fetch upstream main
+
+          UP=$(gh api 'repos/misakano7545/workbuddy2api-panel/releases?per_page=20'             --jq '[.[] | select(.draft == false)][0].tag_name // empty')
+          [ -n "$UP" ] || { echo "::notice::上游没有可用 release"; exit 0; }
+          echo "上游最新 release: $UP"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main 已包含上游全部提交"
+          else
+            git merge upstream/main -m "chore: sync upstream main（上游 $UP）"               || { echo "::error::与上游合并冲突，需要人工解决"; exit 1; }
+            git push origin HEAD:main
+          fi
+
+          if gh release view "$UP" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "已有 $UP 的 Release，无需出包"; exit 0
+          fi
+
+          OURS=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=20"             --jq '[.[] | select(.draft == false)][0].tag_name // empty')
+          if [ -n "$OURS" ]; then
+            newest=$(printf '%s
+%s
+' "$UP" "$OURS" | sort -V | tail -1)
+            if [ "$newest" = "$OURS" ] && [ "$UP" != "$OURS" ]; then
+              echo "上游 $UP 不比我们最新的 $OURS 新，跳过出包"; exit 0
+            fi
+          fi
+
+          git tag -f "$UP" HEAD
+          git push --force origin "refs/tags/$UP"
+          sleep 5
+          gh workflow run binaries.yml --ref "$UP"
+          echo "已触发 $UP 构建"
