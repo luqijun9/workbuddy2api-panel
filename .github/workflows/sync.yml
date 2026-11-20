@@ -58,5 +58,5 @@ jobs:
           git tag -f "$UP" HEAD
           git push --force origin "refs/tags/$UP"
           sleep 5
-          gh workflow run binaries.yml --ref "$UP"
+          gh workflow run binaries.yml --repo "$GITHUB_REPOSITORY" --ref "$UP"
           echo "已触发 $UP 构建"
