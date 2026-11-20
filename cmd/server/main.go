@@ -44,7 +44,7 @@ import (
 // appVersion 面板版本，透出到 /panel/api/overview。
 // 本地构建保持 dev。发布构建由 CI 用 -X 注入上海时间（2026.9.26.711），不跟上游 1.x。
 var appVersion = "dev"
-var appRepository = "misakano7545/workbuddy2api-panel"
+var appRepository = "luqijun9/workbuddy2api-panel" // fork：内置更新指向本仓库（含 DNS 修复）
 
 // insecureKeyWarning 空 api_key = 完全不鉴权（httpauth.VerifyBearer 对空 key 恒放
 // 行），样例占位符 test_key = 人尽皆知的弱密钥；叠加非回环监听（显式配成
@@ -222,7 +222,14 @@ func main() {
 	// 典型场景是 Android（无 /etc/resolv.conf，Go 解析器退回 [::1]:53 全域名失败）
 	// 与本地 DNS 被污染。未配置时保持系统解析器，行为零变化。
 	if len(cfg.DNSServers) > 0 {
-		up.SetDNSDialer(upstream.NewDNSDialer(cfg.DNSServers))
+		nd := upstream.NewDNSDialer(cfg.DNSServers)
+		up.SetDNSDialer(nd)
+		// 同一套解析器接管进程默认解析器：面板登录 loginHTTP、更新检查等
+		// 用裸 net.Dialer / http.DefaultTransport 的客户端都走 net.DefaultResolver
+		//（net/dial.go 最终 return DefaultResolver），Android 上不再撞 [::1]:53。
+		if nd.Resolver != nil {
+			net.DefaultResolver = nd.Resolver
+		}
 	}
 
 	// 积分保底的「收费」兜底判据：接上游模型目录的积分倍率表。本地实测台账无观测
